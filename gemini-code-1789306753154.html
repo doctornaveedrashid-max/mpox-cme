@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SIH Mpox CME Interactive Portal</title>
+    <!-- Firebase Libraries -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f7f6; margin: 0; padding: 15px; text-align: center; color: #333; }
+        .card { background: white; max-width: 500px; margin: 15px auto; padding: 20px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.08); }
+        h2 { color: #0056b3; margin-top: 0; }
+        button { background: #0056b3; color: white; border: none; padding: 12px 20px; border-radius: 6px; font-size: 16px; cursor: pointer; margin: 5px; width: 100%; box-sizing: border-box; }
+        button:disabled { background: #bbb; cursor: not-allowed; }
+        .opt-btn { background: #e9ecef; color: #333; text-align: left; margin: 8px 0; font-size: 15px; }
+        .selected { background: #d1e7dd !important; border: 2px solid #0f5132; }
+        .correct { background: #198754 !important; color: white !important; font-weight: bold; }
+        .incorrect { background: #dc3545 !important; color: white !important; }
+        .hidden { display: none; }
+        input[type="text"] { width: 100%; padding: 12px; font-size: 16px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; margin-bottom: 12px; }
+    </style>
+</head>
+<body>
+
+<!-- VIEW 1: JOIN SESSION -->
+<div id="join-view" class="card">
+    <h2>Shifa CME: Mpox Guidance</h2>
+    <p>Presenter: Dr. Naveed Rashid</p>
+    <input type="text" id="username" placeholder="Enter Your Name">
+    <button onclick="joinSession()">Join CME Session</button>
+</div>
+
+<!-- VIEW 2: AUDIENCE MCQ DISPLAY -->
+<div id="audience-view" class="card hidden">
+    <h3 id="aud-q-title">Waiting for presenter...</h3>
+    <div id="aud-options"></div>
+    <div id="aud-status" style="margin-top:15px; font-weight:bold; color: #6c757d;"></div>
+</div>
+
+<!-- VIEW 3: PRESENTER CONTROL DASHBOARD -->
+<div id="admin-view" class="card hidden">
+    <h2>Presenter Control Dashboard</h2>
+    <p>Control live slides directly from your phone.</p>
+    <button onclick="setMCQ(1)">Push MCQ 1</button>
+    <button onclick="setMCQ(2)">Push MCQ 2</button>
+    <button onclick="setMCQ(3)">Push MCQ 3</button>
+    <button onclick="setMCQ(4)">Push MCQ 4</button>
+    <button onclick="setMCQ(5)">Push MCQ 5</button>
+    <hr>
+    <button onclick="revealAnswer()" style="background:#198754;">Reveal Answer on Phones</button>
+    <button onclick="showFinalScores()" style="background:#6c757d;">Show Cumulative Leaderboard</button>
+    <button onclick="resetSession()" style="background:#dc3545;">Reset All Data</button>
+</div>
+
+<!-- VIEW 4: CUMULATIVE LEADERBOARD -->
+<div id="leaderboard-view" class="card hidden">
+    <h2>Final Participant Scores</h2>
+    <div id="score-list" style="text-align: left;"></div>
+</div>
+
+<script>
+    // 1. FIREBASE CONFIGURATION (Paste your Database URL below)
+    const firebaseConfig = { databaseURL: "YOUR_DATABASE_URL_HERE" };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    // 2. CME MCQ DATASET
+    const mcqs = [
+        { q: "MCQ 1: Immediate triage priority for suspected Mpox?", opt: ["A) Escort to ID OPD corridor", "B) Surgical mask, cover lesions, isolate in-situ", "C) N95 on patient in main waiting area", "D) Send for X-ray prior to isolation"], ans: 1 },
+        { q: "MCQ 2: Mandatory staff PPE standard before entry?", opt: ["A) Surgical mask, gloves, lab coat", "B) Fit-tested N95, face shield, gown, double gloves", "C) N95 and single gloves only", "D) Surgical mask and eye protection"], ans: 1 },
+        { q: "MCQ 3: Critical safety violation during cleaning?", opt: ["A) Yellow Category B waste bags", "B) 1,000 ppm chlorine disinfection", "C) Shaking soiled bed sheets", "D) Rolling linens inward"], ans: 2 },
+        { q: "MCQ 4: Correct swab collection & transport?", opt: ["A) Wooden swab via pneumatic tube", "B) Synthetic swab (2 lesions), double-bagged hand delivery", "C) Fine-needle aspiration", "D) Throat swab left at desk"], ans: 1 },
+        { q: "MCQ 5: Correct exposure response for needle stick?", opt: ["A) Self-isolate 7 days without reporting", "B) Report to IPC & 21-day active monitoring", "C) 5-day oral antibiotics", "D) Continue duties without monitoring"], ans: 1 }
+    ];
+
+    let myName = "";
+    let currentQ = -1;
+    let selectedOption = null;
+
+    function joinSession() {
+        myName = document.getElementById("username").value.trim();
+        if(!myName) return alert("Please enter your name.");
+        
+        // Entering 'admin' opens the Presenter Control Panel
+        if(myName.toLowerCase() === "admin") {
+            showView("admin-view");
+        } else {
+            showView("audience-view");
+            listenToPresenter();
+        }
+    }
+
+    function showView(viewId) {
+        ["join-view", "audience-view", "admin-view", "leaderboard-view"].forEach(v => document.getElementById(v).classList.add("hidden"));
+        document.getElementById(viewId).classList.remove("hidden");
+    }
+
+    // PRESENTER CONTROLS
+    function setMCQ(qNum) {
+        db.ref('sessionState').set({ currentMCQ: qNum - 1, reveal: false, showLeaderboard: false });
+    }
+
+    function revealAnswer() {
+        db.ref('sessionState/reveal').set(true);
+    }
+
+    function showFinalScores() {
+        db.ref('sessionState/showLeaderboard').set(true);
+    }
+
+    function resetSession() {
+        if(confirm("Clear all session data?")) {
+            db.ref().remove();
+            alert("Session Reset.");
+        }
+    }
+
+    // AUDIENCE ENGINE
+    function listenToPresenter() {
+        db.ref('sessionState').on('value', snapshot => {
+            const data = snapshot.val() || {};
+            if(data.showLeaderboard) {
+                showView("leaderboard-view");
+                renderLeaderboard();
+                return;
+            }
+            
+            showView("audience-view");
+            if(data.currentMCQ !== undefined && data.currentMCQ >= 0) {
+                currentQ = data.currentMCQ;
+                renderQuestion(currentQ, data.reveal);
+            } else {
+                document.getElementById("aud-q-title").innerText = "Session connected. Waiting for presenter to push MCQ 1...";
+                document.getElementById("aud-options").innerHTML = "";
+            }
+        });
+    }
+
+    function renderQuestion(qIdx, isRevealed) {
+        const item = mcqs[qIdx];
+        document.getElementById("aud-q-title").innerText = item.q;
+        const optContainer = document.getElementById("aud-options");
+        optContainer.innerHTML = "";
+
+        // Check if audience already answered this question
+        db.ref(`responses/${qIdx}/${myName}`).once('value', snap => {
+            const userChoice = snap.val();
+            
+            item.opt.forEach((optText, i) => {
+                const btn = document.createElement("button");
+                btn.className = "opt-btn";
+                btn.innerText = optText;
+
+                if(userChoice === i) btn.classList.add("selected");
+
+                if(isRevealed) {
+                    btn.disabled = true;
+                    if(i === item.ans) btn.classList.add("correct");
+                    if(userChoice === i && userChoice !== item.ans) btn.classList.add("incorrect");
+                } else {
+                    btn.onclick = () => submitAnswer(qIdx, i);
+                }
+                optContainer.appendChild(btn);
+            });
+
+            document.getElementById("aud-status").innerText = isRevealed 
+                ? "Presenter has revealed the answer." 
+                : (userChoice !== null ? "Answer submitted! Waiting for presenter to reveal..." : "Select your answer:");
+        });
+    }
+
+    function submitAnswer(qIdx, optIdx) {
+        db.ref(`responses/${qIdx}/${myName}`).set(optIdx);
+        renderQuestion(qIdx, false);
+    }
+
+    function renderLeaderboard() {
+        db.ref('responses').once('value', snap => {
+            const allResponses = snap.val() || {};
+            const scores = {};
+
+            Object.keys(allResponses).forEach(qIdx => {
+                const correctAns = mcqs[qIdx].ans;
+                const userVotes = allResponses[qIdx];
+                Object.keys(userVotes).forEach(user => {
+                    if(!scores[user]) scores[user] = 0;
+                    if(userVotes[user] === correctAns) scores[user] += 20; // 20 points per MCQ
+                });
+            });
+
+            const scoreDiv = document.getElementById("score-list");
+            scoreDiv.innerHTML = "";
+            const sortedUsers = Object.keys(scores).sort((a,b) => scores[b] - scores[a]);
+            
+            if(sortedUsers.length === 0) {
+                scoreDiv.innerHTML = "<p>No responses recorded.</p>";
+                return;
+            }
+
+            sortedUsers.forEach((user, index) => {
+                scoreDiv.innerHTML += `<p><strong>#${index+1} ${user}:</strong> ${scores[user]} / 100 Points</p>`;
+            });
+        });
+    }
+</script>
+</body>
+</html>
